@@ -1,0 +1,24 @@
+[Unit]
+Description=Private loopback historical materials inbox
+Documentation=file:%h/projects/chatgpt-pipeline/docs/SERVER_RUNTIME.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/chatgpt-pipeline
+# run preserves the existing prepare_start guards and execs the real foreground
+# server. No model jobs are resumed; the key remains in its original file.
+ExecStart=%h/projects/chatgpt-pipeline/.venv/bin/python %h/projects/chatgpt-pipeline/scripts/workbench.py run --workspace %h/projects/chatgpt-pipeline/runtime/workbench --vault %h/projects/personal-records-vault --port 8766 --models enabled --key-file %h/.hermes/.env
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGINT
+TimeoutStopSec=30
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
