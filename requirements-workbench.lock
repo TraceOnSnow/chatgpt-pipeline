@@ -1,0 +1,5 @@
+# Install from this repository with scripts/workbench.py setup.
+# Local source packages stay editable; the sole external runtime dependency is exact.
+-e .
+-e ../obsidian-workflow
+PyYAML==6.0.3

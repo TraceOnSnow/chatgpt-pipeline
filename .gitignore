@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.env
+.env.*
+!.env.example
+runtime/
+*.sqlite*
+*.db
+*.db-wal
+*.db-shm
+
+# Private deployment records never belong to the public snapshot
+AGENTS.md
+HANDOFF.md
+PLAN.md
+docs/history/
+profiles/personal-*.json

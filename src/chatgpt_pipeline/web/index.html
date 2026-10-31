@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>材料收件箱</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body>
+<a class="skip-link" href="#results-title">跳到材料清单</a>
+<header><div class="shell">
+  <div class="eyebrow">从聊天到自己的知识</div><h1>材料收件箱</h1>
+  <p class="intro">读一读当时的想法，留下值得继续整理的内容。</p>
+  <div class="overview"><div id="stats" aria-live="polite">正在读取材料…</div><span id="library-status" class="connection">正在连接…</span></div>
+  <nav id="tabs" aria-label="处理状态"></nav>
+  <div class="search-row"><label class="search" for="search">搜索当前分类<input id="search" type="search" maxlength="300" placeholder="标题或摘要…" autocomplete="off"></label><button id="clear-search" hidden>清空搜索</button></div>
+</div></header>
+<main class="shell">
+  <div class="results-bar"><h2 id="results-title" tabindex="-1">材料清单</h2><div class="pagination" aria-label="上方分页"><button id="previous-top">上一页</button><span id="page-top"></span><button id="next-top">下一页</button></div></div>
+  <section id="items" aria-label="材料清单" aria-busy="true"><p class="empty" role="status">正在读取材料…</p></section>
+  <div id="pages" class="pagination" aria-label="下方分页"><button id="previous">上一页</button><span id="page"></span><button id="next">下一页</button></div>
+  <details class="service-info"><summary>使用说明与连接信息</summary><p>阅读材料后可选择生成初稿；检查后再导入内容库。略过可以撤回，原聊天会保留。</p><p id="model-status"></p><p id="library-location"></p><p id="usage"></p></details>
+</main>
+<div id="notice" class="notice" role="status" aria-live="polite" hidden><span id="notice-text"></span><button id="notice-action" hidden></button><button id="dismiss-notice" aria-label="关闭提示">×</button></div>
+<dialog id="preview" aria-labelledby="preview-title">
+  <div class="dialogbar"><div><span class="eyebrow">笔记初稿</span><h2 id="preview-title" tabindex="-1">正在打开…</h2></div><button id="close-preview" aria-label="关闭初稿">关闭</button></div>
+  <div id="note-scroll" class="note-scroll"><p id="preview-status" class="preview-status" role="status" aria-live="polite"></p><details id="receipt-detail" hidden><summary>查看入库位置</summary><p id="receipt-location"></p></details><article id="note-body" aria-busy="true"></article></div>
+  <div class="dialog-footer"><div class="note-navigation"><button id="preview-previous" aria-keyshortcuts="Alt+ArrowLeft">上一篇</button><span id="preview-position" aria-live="polite"></span><button id="preview-next" aria-keyshortcuts="Alt+ArrowRight">下一篇</button></div><div class="note-actions"><a id="download" class="button" hidden>下载 Markdown</a><button id="import-preview" class="primary" hidden>导入 Markdown 库</button></div></div>
+</dialog>
+</body></html>
