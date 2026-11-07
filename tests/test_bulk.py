@@ -57,6 +57,27 @@ class BulkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Oversize"):
             list(bulk.chunk_messages([{"id": "long", "role": "user", "text": "a" * 24001}]))
 
+    def test_source_policy_is_frozen_for_new_jobs_and_legacy_jobs_remain_readable(self):
+        _, definition, data, request = bulk.load_job(self.store, self.job)
+        self.assertEqual(definition["identity"]["source_policy_revision"], bulk.SOURCE_POLICY_REVISION)
+        self.assertEqual(request["messages"][0]["content"], bulk.SCREEN_PROMPT + bulk.SOURCE_POLICY_PROMPT)
+        originals = bulk.source_messages(data["source"])
+        old_job = bulk.ensure_job(self.store, data["source"], [], originals, source_policy_revision=None)
+        old_dir, old_def, _, old_request = bulk.load_job(self.store, old_job)
+        old_bytes = {name: (old_dir / name).read_bytes() for name in ("definition.json", "request.json", "input.json")}
+        self.assertNotEqual(old_job, self.job)
+        self.assertNotIn("source_policy_revision", old_def["identity"])
+        self.assertEqual(old_request["messages"][0]["content"], bulk.SCREEN_PROMPT)
+        self.assertEqual(bulk.load_job(self.store, self.job)[3], request)
+        self.manifest["conversations"][0]["jobs"] = [old_job]
+        bulk.save(self.output / "manifest.json", self.manifest)
+        bulk.save(self.output / "manifest-seal.json", {"sha256": bulk.digest(self.manifest)})
+        bulk.reconfigure_pending(self.output)
+        self.assertEqual(bulk.batch(self.output)[1]["conversations"][0]["jobs"], [old_job])
+        self.assertEqual({name: (old_dir / name).read_bytes() for name in old_bytes}, old_bytes)
+        with self.assertRaisesRegex(ValueError, "source policy revision"):
+            bulk.ensure_job(self.store, data["source"], [], originals, source_policy_revision="unrecognized")
+
     def test_saved_response_recovers_offline_and_is_never_charged_again(self):
         self.save_response(self.result("skip"))
         self.assertEqual(bulk.recover(self.directory)["state"], "complete")

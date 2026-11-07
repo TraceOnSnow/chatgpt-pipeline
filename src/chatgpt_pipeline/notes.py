@@ -729,11 +729,15 @@ def prepare_bundle(workspace, main_item_id, editorial):
         candidates.append({"item_id": item_id, "source_index": source_index,
                            "title": prepared["candidate"]["title"], "summary": prepared["candidate"]["summary"],
                            "evidence": evidence})
+    # A summary/evidence fragment is a locator, not the full writing source.
+    # Preserve the complete original conversations when they fit, including
+    # later corrections, adoption, and explicit requests to save the material.
+    whole_sources = sum(len(m["text"]) for values in source_messages.values() for m in values) <= MAX_SOURCE
     records, seen = [], set()
     for source_index, originals in source_messages.items():
         for message in originals:
             message_key = key(sources[source_index], message)
-            if message_key in (mandatory | neighboring) and message_key not in seen:
+            if (whole_sources or message_key in (mandatory | neighboring)) and message_key not in seen:
                 records.append((message_key, source_index, message))
                 seen.add(message_key)
     size = sum(len(m["text"]) for k, _i, m in records if k in mandatory)
@@ -760,12 +764,17 @@ def prepare_bundle(workspace, main_item_id, editorial):
             ref["message_id"] = aliases[(source["account_key"], source["conversation_id"], ref["source_message_id"],
                                          ref["role"], ref["text_sha256"])]
     material = {"version": VERSION, "source": sources[0], "sources": sources,
-                "scope": "Union of all bundled candidate evidence and whole immediate adjacent messages within fixed bound",
+                "scope": ("Complete original eligible conversations; candidate summaries only locate the writing topic"
+                          if whole_sources else
+                          "Bounded original candidate evidence and whole immediate adjacent messages; other original messages not included"),
+                "source_policy_revision": bulk.SOURCE_POLICY_REVISION,
                 "candidate": {"title": candidates[0]["title"], "summary": candidates[0]["summary"]},
                 "messages": rendered, "codes": codes,
                 "personal_evidence_ids": [m["id"] for m in rendered if m["id"] in {aliases[k] for k in personal}],
                 "bundle": {"version": "accepted-evidence-bundle-v1", "bundle_item_ids": ordered_ids,
-                           "candidates": candidates, "omitted_adjacent_messages": len((neighboring - mandatory) - selected)}}
+                           "candidates": candidates, "complete_source_context": whole_sources,
+                           "omitted_source_messages": sum(len(values) for values in source_messages.values()) - len(rendered),
+                           "omitted_adjacent_messages": len((neighboring - mandatory) - selected)}}
     verify_material_sources(material)
     return material
 
@@ -789,6 +798,7 @@ def prepare_material(candidate, store):
         for match in re.finditer(r"(?m)^(`{3,}|~{3,})[^\n]*\n.*?^\1[ \t]*(?=\n|$)", message["text"], re.S | re.M):
             codes[f"c{len(codes) + 1:03d}"] = {"message_id": alias, "text": match.group()}
     return {"version": VERSION, "source": candidate["source"], "scope": scope,
+            "source_policy_revision": bulk.SOURCE_POLICY_REVISION,
             "candidate": {"title": candidate["title"], "summary": candidate["summary"]},
             "messages": rendered, "codes": codes,
             "personal_evidence_ids": [m["id"] for m in rendered if m["source_message_id"] in user_evidence]}

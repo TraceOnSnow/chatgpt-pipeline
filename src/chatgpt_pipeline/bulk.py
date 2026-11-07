@@ -58,6 +58,25 @@ REVIEW_PROMPT = SCREEN_PROMPT + """
 输出仍严格使用上述 JSON 结构。此复核不代表外部事实已核实。
 """
 
+# Keep legacy prompts intact: saved jobs validate against their original contract.
+# New jobs freeze this suffix revision separately, including custom profiles.
+SOURCE_POLICY_REVISION = "source-first-v1"
+SOURCE_POLICY_PROMPT = """
+源文优先规则（与前文价值筛选冲突时以本规则为准）：
+DeepSeek筛选摘要、候选summary和旧初稿仅作导航，不是证据；原文未支持的主张不能写成事实。
+原文中明确要求保存、补充或写进笔记的意图应优先评估，不能仅因内容可再次提问而跳过；
+普通闲聊仍不强行入库，保存意图也不证明内容有原创归属，更不等于公开授权。
+用户引用或粘贴的旧AI文字不自动成为本人观点、经历或现场表现；仅据本人明确自述归属。
+生成补稿前必须回读完整实际原消息和现稿，摘要不能替代回读；不足时保留待核缺口，不能猜补。
+附件或录音缺失、未读取或未理解时明确保留限制，不能据此判无价值，也不能声称已经理解。
+"""
+
+
+def source_policy_prompt(prompt, revision=None):
+    """Apply an explicit frozen revision; absent means the legacy contract."""
+    require(revision in (None, SOURCE_POLICY_REVISION), "Unsupported source policy revision")
+    return prompt + (SOURCE_POLICY_PROMPT if revision else "")
+
 
 def atomic_bytes(path, data):
     path = Path(path)
@@ -146,7 +165,8 @@ def payload(stage, rendered):
                 {"role": "user", "content": rendered}], "provider": PROVIDER}
 
 
-def ensure_job(store, source, context, primary, stage="screen", parent=None, candidate=None, profile=None):
+def ensure_job(store, source, context, primary, stage="screen", parent=None, candidate=None, profile=None,
+               source_policy_revision=SOURCE_POLICY_REVISION):
     all_messages = context + primary
     primary_ids = {m["id"] for m in primary}
     refs = [{"id": f"m{i:03d}", "source_message_id": m["id"], "role": m["role"],
@@ -162,6 +182,8 @@ def ensure_job(store, source, context, primary, stage="screen", parent=None, can
     if profile is not None:
         validate_profile(profile)
         request["messages"][0]["content"] = profile["screen_prompt" if stage == "screen" else "review_prompt"]
+    request["messages"][0]["content"] = source_policy_prompt(
+        request["messages"][0]["content"], source_policy_revision)
     require(sum(len(m["content"]) for m in request["messages"]) <= MAX_REQUEST_CHARS, "Request too large")
     # Titles and unrelated export metadata do not alter analysis job identity.
     identity = {"account_key": source["account_key"], "conversation_id": source["conversation_id"],
@@ -172,6 +194,8 @@ def ensure_job(store, source, context, primary, stage="screen", parent=None, can
         identity["chunk_version"] = source["segmentation_version"]
     if profile is not None:
         identity["selection_profile"] = profile
+    if source_policy_revision is not None:
+        identity["source_policy_revision"] = source_policy_revision
     job_id = digest(identity)
     directory = store / job_id
     if directory.exists():
@@ -228,6 +252,7 @@ def load_job(store, job_id):
     if profile is not None:
         validate_profile(profile)
         expected_prompt = profile["screen_prompt" if stage == "screen" else "review_prompt"]
+    expected_prompt = source_policy_prompt(expected_prompt, definition["identity"].get("source_policy_revision"))
     require(request["model"] == MODEL and request["max_tokens"] == MAX_OUTPUT and
             request["messages"][0]["content"] == expected_prompt,
             "Unsupported workflow configuration")
@@ -237,7 +262,8 @@ def load_job(store, job_id):
     return directory, definition, source, request
 
 
-def prepare(database, output):
+def prepare(database, output, *, source_policy_revision=SOURCE_POLICY_REVISION):
+    source_policy_prompt("", source_policy_revision)
     output = runtime_path(output)
     require(not output.exists(), "Batch already exists; resume it instead")
     store = Path(__file__).resolve().parents[2] / "runtime" / "selection-jobs"
@@ -287,7 +313,8 @@ def prepare(database, output):
                 except ValueError as error:
                     gaps.append({"account_key": c["account_key"], "conversation_id": c["conversation_id"], "reason": str(error)})
                     continue
-                jobs = [ensure_job(store, source, context, primary) for context, primary in chunks]
+                jobs = [ensure_job(store, source, context, primary,
+                                   source_policy_revision=source_policy_revision) for context, primary in chunks]
                 entries.append({"source": source, "jobs": jobs, "message_count": len(messages),
                                 "source_characters": sum(len(m["text"]) for m in messages)})
             require(sha((root / "catalog.json").read_bytes()) == latest, "Catalog moved during preparation")
@@ -386,7 +413,9 @@ def reconfigure_pending(output):
             primary = [messages[r["source_message_id"]] for r in data["messages"] if r["primary"]]
             parent = definition["identity"]["parent"]
             candidate = read(store / parent / "result.json") if parent else None
-            replacement = ensure_job(store, data["source"], context, primary, definition["identity"]["stage"], parent, candidate)
+            replacement = ensure_job(store, data["source"], context, primary, definition["identity"]["stage"], parent, candidate,
+                                     profile=definition["identity"].get("selection_profile"),
+                                     source_policy_revision=definition["identity"].get("source_policy_revision"))
             if replacement != job_id:
                 replacements[job_id] = replacement
         for entry in manifest["conversations"]:
@@ -459,7 +488,8 @@ def review_job(store, job_id):
     context = [messages[r["source_message_id"]] for r in input_data["messages"] if not r["primary"]]
     primary = [messages[r["source_message_id"]] for r in input_data["messages"] if r["primary"]]
     return ensure_job(store, input_data["source"], context, primary, "review", job_id, read(directory / "result.json"),
-                      profile=definition["identity"].get("selection_profile"))
+                      profile=definition["identity"].get("selection_profile"),
+                      source_policy_revision=definition["identity"].get("source_policy_revision"))
 
 
 def member_jobs(manifest, store, create_reviews=False):

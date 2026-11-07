@@ -72,7 +72,8 @@ class MemoryTests(unittest.TestCase):
         store, job, (directory, definition, source, request) = self.job()
         self.assertEqual(source["source"]["zip_provenance"]["zip_sha256"], memory.file_sha(self.zip))
         self.assertEqual(source["source"]["input_fingerprint"], normalize(first)["input_fingerprint"])
-        self.assertEqual(request["messages"][0]["content"], bulk.load_profile(self.profile)["screen_prompt"])
+        self.assertEqual(request["messages"][0]["content"], bulk.source_policy_prompt(
+            bulk.load_profile(self.profile)["screen_prompt"], bulk.SOURCE_POLICY_REVISION))
         self.assertEqual(len(bulk.source_messages(source["source"])), 1)
 
     def test_unsupported_tools_and_attachments_are_gaps_without_losing_readable_text(self):
@@ -138,13 +139,47 @@ class MemoryTests(unittest.TestCase):
         child = bulk.review_job(store, job)
         child_dir, child_def, _, child_request = bulk.load_job(store, child)
         self.assertEqual(child_def["identity"]["selection_profile"], definition["identity"]["selection_profile"])
-        self.assertTrue(child_request["messages"][0]["content"].endswith("test-review"))
+        self.assertEqual(child_def["identity"]["source_policy_revision"], bulk.SOURCE_POLICY_REVISION)
+        self.assertEqual(child_request["messages"][0]["content"], bulk.source_policy_prompt(
+            definition["identity"]["selection_profile"]["review_prompt"], bulk.SOURCE_POLICY_REVISION))
         bulk.save(directory / "review.json", {"job_id": child, "parent_result_sha256": bulk.digest(bulk.read(directory / "result.json"))})
         self.finish(child_dir)
         self.assertEqual(bulk.export(self.output)["kept_items"], 1)
         workspace = self.base / "runtime/new-notes"
         memory.initialize(self.output, workspace)
         self.assertEqual(notes.Workspace(workspace).list()["counts"]["todo"], 1)
+
+    def test_new_memory_jobs_apply_policy_without_rewriting_frozen_personal_profile_or_old_jobs(self):
+        profile_body = bulk.read(self.profile)
+        profile_body["version"] = "memory-personal-v1"
+        bulk.save(self.profile, profile_body)
+        profile_bytes = self.profile.read_bytes()
+        self.prepare([package()["raw"]], source_policy_revision=None)
+        store, job, (directory, definition, _source, request) = self.job()
+        frozen_files = [self.output / "manifest.json", self.output / "manifest-seal.json",
+                        self.output / "selection-profile.json", directory / "definition.json",
+                        directory / "request.json", directory / "input.json"]
+        before = {path: path.read_bytes() for path in frozen_files}
+        self.assertNotIn("source_policy_revision", definition["identity"])
+        self.assertEqual(request["messages"][0]["content"], profile_body["screen_prompt"])
+
+        new_output = self.base / "runtime/new-policy"
+        memory.prepare(self.zip, new_output, self.profile, "account-a")
+        _, new_manifest, new_store = bulk.batch(new_output)
+        new_job = new_manifest["conversations"][0]["jobs"][0]
+        _, new_definition, _, new_request = bulk.load_job(new_store, new_job)
+        self.assertNotEqual(job, new_job)
+        self.assertEqual(new_definition["identity"]["source_policy_revision"], bulk.SOURCE_POLICY_REVISION)
+        self.assertEqual(new_definition["identity"]["selection_profile"], definition["identity"]["selection_profile"])
+        self.assertTrue(new_request["messages"][0]["content"].endswith(bulk.SOURCE_POLICY_PROMPT))
+        self.assertEqual(self.profile.read_bytes(), profile_bytes)
+        self.assertEqual({path: path.read_bytes() for path in frozen_files}, before)
+        self.assertEqual(bulk.load_job(store, job)[3], request)
+        self.finish(directory)
+        child = bulk.review_job(store, job)
+        _, child_definition, _, child_request = bulk.load_job(store, child)
+        self.assertNotIn("source_policy_revision", child_definition["identity"])
+        self.assertEqual(child_request["messages"][0]["content"], profile_body["review_prompt"])
 
     def test_new_profile_jobs_keep_budget_and_no_resend_guards(self):
         self.prepare([package()["raw"]])

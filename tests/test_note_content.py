@@ -187,6 +187,43 @@ class ContentNoteTests(unittest.TestCase):
         with patch.object(note_content, "PROMPT", "changed prompt"):
             self.assertNotEqual(note_content.configuration()["draft_prompt_sha256"], config["draft_prompt_sha256"])
 
+    def test_source_policy_is_explicit_and_keeps_legacy_content_request_compatible(self):
+        old_material = deepcopy(self.material)
+        old_config = note_content.configuration(old_material)
+        old_requests = {stage: note_content.payload(stage, old_material, "# 初稿\n\n待核。")
+                        for stage in ("draft", "review")}
+        self.material["source_policy_revision"] = bulk.SOURCE_POLICY_REVISION
+        new_config = note_content.configuration(self.material)
+        self.assertEqual(new_config["source_policy_revision"], bulk.SOURCE_POLICY_REVISION)
+        self.assertEqual(new_config["source_policy_prompt_sha256"], sha(bulk.SOURCE_POLICY_PROMPT.encode()))
+        self.assertEqual({k: v for k, v in new_config.items() if not k.startswith("source_policy")}, old_config)
+        for stage in ("draft", "review"):
+            current = note_content.payload(stage, self.material, "# 初稿\n\n待核。")
+            self.assertEqual(current["messages"][0]["content"],
+                             old_requests[stage]["messages"][0]["content"] + bulk.SOURCE_POLICY_PROMPT)
+            self.assertEqual(note_content.payload(stage, old_material, "# 初稿\n\n待核。"), old_requests[stage])
+        self.assertEqual(note_content.configuration(old_material), old_config)
+        self.material["source_policy_revision"] = "unknown-version"
+        with self.assertRaisesRegex(ValueError, "source policy revision"):
+            note_content.configuration(self.material)
+        with self.assertRaisesRegex(ValueError, "source policy revision"):
+            note_content.payload("draft", self.material)
+
+    def test_source_first_contract_keeps_summary_ai_authorship_and_publication_separate(self):
+        self.material["source_policy_revision"] = bulk.SOURCE_POLICY_REVISION
+        self.material["candidate"]["summary"] = "我已验证并完成全部实验。"
+        self.material["messages"][0]["text"] = "请保存到笔记。以下是旧AI的话：你已经完成全部实验。"
+        for stage in ("draft", "review"):
+            request = note_content.payload(stage, self.material, "# 初稿\n\n待核。")
+            prompt = request["messages"][0]["content"]
+            data = loads(request["messages"][1]["content"])
+            self.assertEqual(data["candidate"], self.material["candidate"])
+            self.assertIn(self.material["messages"][0]["text"], data["conversation"])
+            for rule in ("仅作导航，不是证据", "不能写成事实", "旧AI文字不自动成为本人观点、经历或现场表现",
+                         "保存意图也不证明内容有原创归属，更不等于公开授权", "回读完整实际原消息和现稿",
+                         "不能据此判无价值，也不能声称已经理解"):
+                self.assertIn(rule, prompt)
+
     def test_draft_payload_is_plain_markdown_with_source_once(self):
         request = note_content.payload("draft", self.material)
         self.assertNotIn("response_format", request)

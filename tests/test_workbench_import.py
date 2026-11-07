@@ -137,7 +137,7 @@ class WorkbenchImportTests(unittest.TestCase):
             self.assertEqual(repaired["id"], first["id"])
             self.assertEqual(destination.read_text(), edited)
         self.assertEqual(self.workspace.usage()["calls"], 2)
-        self.assertEqual(len(list((vault / "notes").glob("*.md"))), 1)
+        self.assertEqual(len(list(destination.parent.glob("*.md"))), 1)
 
     def test_failure_keeps_generated_and_retry_does_not_run_model(self):
         self.generated()

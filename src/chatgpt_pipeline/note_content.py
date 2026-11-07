@@ -65,6 +65,11 @@ def configuration(material=None):
     if material and material.get("editorial"):
         result["editorial_prompt_sha256"] = sha(EDITORIAL_PROMPT.encode())
         result["editorial_version"] = "memory-editorial-v1"
+    revision = (material or {}).get("source_policy_revision")
+    bulk.source_policy_prompt("", revision)
+    if revision is not None:
+        result["source_policy_revision"] = revision
+        result["source_policy_prompt_sha256"] = sha(bulk.SOURCE_POLICY_PROMPT.encode())
     return result
 
 
@@ -97,8 +102,9 @@ def payload(stage, material, draft=None):
     result = {"model": bulk.MODEL, "temperature": 0.2, "max_tokens": MAX_OUTPUT,
               "stream": False, "reasoning": {"enabled": False, "effort": "none"},
               "provider": deepcopy(bulk.PROVIDER), "messages": [
-                  {"role": "system", "content": (PROMPT if stage == "draft" else REVIEW_PROMPT)
-                   + (EDITORIAL_PROMPT if editorial else "")},
+                  {"role": "system", "content": bulk.source_policy_prompt(
+                      (PROMPT if stage == "draft" else REVIEW_PROMPT) + (EDITORIAL_PROMPT if editorial else ""),
+                      material.get("source_policy_revision"))},
                   {"role": "user", "content": encoded(data).decode()}]}
     if stage == "review":
         properties = {"markdown": {"type": "string"},

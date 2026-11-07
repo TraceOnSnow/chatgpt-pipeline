@@ -23,11 +23,13 @@ class NoteBundleTests(unittest.TestCase):
         first = package("My first experiment.\n```py\nx = 1\n```")["raw"]
         for number, role, text in ((2, "assistant", "An unverified suggestion."),
                                    (3, "user", "My distinct related observation."),
-                                   (4, "assistant", "A later unverified suggestion.")):
+                                   (4, "assistant", "A later unverified suggestion."),
+                                   (5, "user", "Please save this personal reflection in my private notes; this is not permission to publish."),
+                                   (6, "assistant", "An unverified interpretation of that reflection.")):
             first["mapping"][f"n{number}"] = {"parent": f"n{number - 1}", "message": {
                 "id": f"m{number}", "author": {"role": role}, "recipient": "all",
                 "content": {"content_type": "text", "parts": [text]}}}
-        first["current_node"] = "n4"
+        first["current_node"] = "n6"
         second = deepcopy(first)
         second["conversation_id"] = "c2"
         second["mapping"] = {k: v for k, v in second["mapping"].items() if k in ("n1", "n2")}
@@ -83,17 +85,29 @@ class NoteBundleTests(unittest.TestCase):
     def test_union_dedup_aliases_codes_and_all_subtopics_are_preserved(self):
         job, material = self.bundle()
         self.assertEqual(len(material["sources"]), 2)
-        self.assertEqual(len(material["messages"]), 6)
+        self.assertEqual(len(material["messages"]), 8)
         self.assertEqual(len(material["bundle"]["candidates"]), 3)
         self.assertEqual(len(material["codes"]), 2)
         self.assertEqual(len(material["personal_evidence_ids"]), 3)
-        self.assertEqual(len({m["id"] for m in material["messages"]}), 6)
+        self.assertEqual(len({m["id"] for m in material["messages"]}), 8)
         self.assertEqual({s["conversation_id"] for s in material["sources"]}, {"c1", "c2"})
         notes.verify_material_sources(material)
         self.assertEqual(self.workspace.request(self.main)["id"], job["id"])
         with self.workspace.db() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM calls").fetchone()[0], 0)
+
+    def test_short_original_keeps_save_intent_outside_candidate_neighbors(self):
+        _, material = self.bundle()
+        # Neither retained candidate cites m5; m5 is outside their immediate
+        # neighbors. Earlier bundling silently omitted this explicit intent.
+        saved = [m for m in material["messages"] if m["source_index"] == 0 and m["source_message_id"] == "m5"]
+        self.assertEqual(len(saved), 1)
+        self.assertIn("not permission to publish", saved[0]["text"])
+        self.assertTrue(material["bundle"]["complete_source_context"])
+        self.assertEqual(material["bundle"]["omitted_source_messages"], 0)
+        self.assertEqual(material["source_policy_revision"], bulk.SOURCE_POLICY_REVISION)
+        notes.verify_material_sources(material)
 
     def test_cross_source_role_and_text_tampering_fail_closed(self):
         _, material = self.bundle()

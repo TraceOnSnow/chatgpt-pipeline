@@ -103,7 +103,9 @@ def date(value):
         return None
 
 
-def prepare(zip_path, output, profile_path, account_key, index=None, skip_existing=True):
+def prepare(zip_path, output, profile_path, account_key, index=None, skip_existing=True, *,
+            source_policy_revision=bulk.SOURCE_POLICY_REVISION):
+    bulk.source_policy_prompt("", source_policy_revision)
     output = bulk.runtime_path(output)
     require(not output.exists(), "Memory batch already exists; resume with run/export")
     require(isinstance(account_key, str) and re.fullmatch(r"[A-Za-z0-9_.@-]{1,150}", account_key), "Explicit account key required")
@@ -185,7 +187,8 @@ def prepare(zip_path, output, profile_path, account_key, index=None, skip_existi
                           "branch": "current", "current_node": normalized["current_node"],
                           "url": obj["url"], "title": raw.get("title") or "", "adapter": ADAPTER,
                           "zip_provenance": provenance, "segmentation_version": SEGMENTATION, "segments": segments}
-                jobs = [bulk.ensure_job(store, source, context, primary, profile=profile)
+                jobs = [bulk.ensure_job(store, source, context, primary, profile=profile,
+                                        source_policy_revision=source_policy_revision)
                         for context, primary in bulk.chunk_messages(messages)]
                 entries.append({"source": source, "jobs": jobs, "message_count": len(messages),
                                 "source_characters": sum(len(m["text"]) for m in messages)})
