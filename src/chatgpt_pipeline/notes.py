@@ -100,6 +100,13 @@ def config(version=VERSION):
             "draft_prompt_sha256": sha(draft_prompt.encode()), "review_prompt_sha256": sha(review_prompt.encode())}
 
 
+def call_reservation(payload):
+    """Per-call ledger reservation: UTF-8 request bytes and max output at the frozen price cap."""
+    cap = bulk.PROVIDER["max_price"]
+    return (Decimal(len(encoded(payload))) * Decimal(str(cap["prompt"])) +
+            payload["max_tokens"] * Decimal(str(cap["completion"]))) / Decimal(1000000) * Decimal("1.1")
+
+
 @contextmanager
 def locked(path, blocking=True):
     with Path(path).open("a+b") as stream:
@@ -534,9 +541,7 @@ class Workspace:
             require(call is None, "needs_reconciliation: previous attempt has no saved response; check provider records, no automatic retry")
             key = credential(key_file)
             # UTF-8 bytes are a conservative tokenizer bound; actual usage is kept separately.
-            cap = bulk.PROVIDER["max_price"]
-            reserve = (Decimal(len(encoded(payload))) * Decimal(str(cap["prompt"])) +
-                       payload["max_tokens"] * Decimal(str(cap["completion"]))) / Decimal(1000000) * Decimal("1.1")
+            reserve = call_reservation(payload)
             with self.db() as db:
                 db.execute("BEGIN IMMEDIATE")
                 calls = db.execute("SELECT cost,reservation FROM calls").fetchall()

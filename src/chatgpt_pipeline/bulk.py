@@ -165,8 +165,9 @@ def payload(stage, rendered):
                 {"role": "user", "content": rendered}], "provider": PROVIDER}
 
 
-def ensure_job(store, source, context, primary, stage="screen", parent=None, candidate=None, profile=None,
-               source_policy_revision=SOURCE_POLICY_REVISION):
+def build_request(context, primary, stage="screen", candidate=None, profile=None,
+                  source_policy_revision=SOURCE_POLICY_REVISION):
+    """Pure request construction shared by job creation and offline planning."""
     all_messages = context + primary
     primary_ids = {m["id"] for m in primary}
     refs = [{"id": f"m{i:03d}", "source_message_id": m["id"], "role": m["role"],
@@ -185,6 +186,19 @@ def ensure_job(store, source, context, primary, stage="screen", parent=None, can
     request["messages"][0]["content"] = source_policy_prompt(
         request["messages"][0]["content"], source_policy_revision)
     require(sum(len(m["content"]) for m in request["messages"]) <= MAX_REQUEST_CHARS, "Request too large")
+    return refs, request
+
+
+def reservation_usd(request):
+    """Single-call reservation under the frozen provider price cap (bulk-run formula)."""
+    cap = request["provider"]["max_price"]
+    return max(Decimal("0.01"), (Decimal(len(encoded(request)) + 2048) * Decimal(str(cap["prompt"]))
+               + MAX_OUTPUT * Decimal(str(cap["completion"]))) / Decimal(1000000) * Decimal("1.1"))
+
+
+def ensure_job(store, source, context, primary, stage="screen", parent=None, candidate=None, profile=None,
+               source_policy_revision=SOURCE_POLICY_REVISION):
+    refs, request = build_request(context, primary, stage, candidate, profile, source_policy_revision)
     # Titles and unrelated export metadata do not alter analysis job identity.
     identity = {"account_key": source["account_key"], "conversation_id": source["conversation_id"],
                 "normalization_version": VERSION, "chunk_version": CHUNK_VERSION,
@@ -687,9 +701,7 @@ def _run(output, manifest, store, key_file, workers, budget):
         # UTF-8 bytes bound token count conservatively; price margin also covers routing variation.
         reservation = max(Decimal("0.01"), (Decimal(len(encoded(request)) + 2048) * prices[0] + MAX_OUTPUT * prices[1]) * 10)
         if request.get("provider", {}).get("max_price"):
-            cap = request["provider"]["max_price"]
-            reservation = max(Decimal("0.01"), (Decimal(len(encoded(request)) + 2048) * Decimal(str(cap["prompt"]))
-                              + MAX_OUTPUT * Decimal(str(cap["completion"]))) / Decimal(1000000) * Decimal("1.1"))
+            reservation = reservation_usd(request)
         with guard:
             if stop.is_set():
                 return

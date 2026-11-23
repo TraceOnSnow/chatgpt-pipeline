@@ -48,7 +48,8 @@ def read_source(root, relative, pattern):
     return target.read_bytes()
 
 
-def verify(account_root, commit_path):
+def verify(account_root, commit_path, *, retain=None):
+    """Verify every byte; ``retain`` may keep a smaller per-package summary instead of bodies."""
     root = Path(account_root).absolute()
     commit_path = Path(commit_path).absolute()
     require(commit_path.parent == root / "commits", "Commit outside account commits")
@@ -67,7 +68,7 @@ def verify(account_root, commit_path):
             and catalog.get("account_key") == root.name,
             "Catalog identity/schema mismatch")
     require(isinstance(commit.get("objects"), list), "Invalid objects list")
-    packages = {}
+    packages, contents = {}, {}
     for entry in commit["objects"]:
         name = entry["path"]
         require(name not in packages, "Duplicate object path")
@@ -87,7 +88,8 @@ def verify(account_root, commit_path):
                 "Mapping checksum mismatch")
         require(raw.get("conversation_id", package["conversation_id"]) == package["conversation_id"],
                 "Raw conversation mismatch")
-        packages[name] = {"package": package, "byte_sha256": sha(body)}
+        contents[name] = package["content_sha256"]
+        packages[name] = {"package": package if retain is None else retain(package), "byte_sha256": sha(body)}
     require(type(commit.get("object_count")) is int and len(packages) == commit["object_count"],
             "Object count mismatch")
     require(isinstance(catalog.get("conversations"), list), "Invalid catalog conversations")
@@ -103,7 +105,7 @@ def verify(account_root, commit_path):
         if name:
             require(name in packages and name == f"objects/{identity}/{entry['raw_sha256']}.json",
                     "Missing or mismatched catalog object")
-            require(entry.get("content_sha256") == packages[name]["package"]["content_sha256"],
+            require(entry.get("content_sha256") == contents[name],
                     "Catalog content hash mismatch")
     require(type(catalog.get("listing_complete")) is bool and type(catalog.get("bodies_complete")) is bool,
             "Invalid catalog completeness")

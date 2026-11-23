@@ -18,6 +18,17 @@ def main():
     check = sub.add_parser("verify", help="Verify one published commit without writing")
     check.add_argument("account_root", type=Path)
     check.add_argument("commit", type=Path)
+    plan = sub.add_parser("incremental-plan", help="Read-only plan of new/continued chats versus the processed baseline")
+    plan.add_argument("account_root", type=Path)
+    plan.add_argument("--commit", type=Path, help="Published commit; default is the one matching catalog.json")
+    plan.add_argument("--workspace", type=Path, help="Workbench workspace: derive the baseline from registered batches")
+    plan.add_argument("--baseline-catalog", type=Path, action="append", default=[],
+                      help="Explicit processed catalog (must match a published commit); repeatable")
+    plan.add_argument("--vault", type=Path, help="Markdown library root, read only for source registrations")
+    plan.add_argument("--profile", type=Path, help="Selection profile used for request-size estimates")
+    plan.add_argument("--since", help="Also count unprocessed user messages at or after this ISO time (with timezone)")
+    plan.add_argument("--out", type=Path, help="Write the JSON plan to a new file instead of stdout")
+    plan.add_argument("--summary", type=Path, help="Also write a readable Markdown summary to a new file")
     load = sub.add_parser("ingest", help="Verify all commits and build an offline index")
     load.add_argument("--exports", type=Path, default=Path("/home/trace/data/chatgpt/exports"))
     load.add_argument("--database", type=Path, required=True)
@@ -103,6 +114,23 @@ def main():
             output = {"verified": True, "account_key": result["account_key"],
                       "commit_sha256": result["commit_sha256"], "catalog_sha256": result["catalog_sha256"],
                       "objects": len(result["packages"]), "conversations": len(result["catalog"]["conversations"])}
+        elif args.command == "incremental-plan":
+            from .incremental import dumps, plan as incremental_plan, summary_text, write_private
+            from .verify import require
+            require(args.workspace or args.baseline_catalog, "Pass --workspace to derive a baseline or --baseline-catalog")
+            for target in (args.out, args.summary):
+                require(target is None or not target.exists(), "Output exists; existing files are never replaced")
+            result = incremental_plan(args.account_root, args.commit, workspace=args.workspace,
+                                      baseline_catalogs=args.baseline_catalog, vault=args.vault,
+                                      profile_path=args.profile, since=args.since)
+            if args.out is None:
+                sys.stdout.buffer.write(dumps(result))
+                return
+            written = {"plan": write_private(args.out, dumps(result))}
+            if args.summary:
+                written["summary"] = write_private(args.summary, summary_text(result).encode())
+            output = {"written": written, "counts": result["counts"], "estimate": {
+                k: v for k, v in result["estimate"].items() if k not in ("basis", "notes_ledger")}}
         elif args.command == "ingest":
             output = ingest(args.exports, args.database)
         elif args.command == "status":

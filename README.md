@@ -39,6 +39,18 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
   --database runtime/index.sqlite3 --out runtime/selection-example
 ```
 
+已有处理批次后，可用只读增量计划核对新会话和续聊，再决定是否授权新一轮筛选。它校验指定或最新的已发布 commit，与基线逐条比较消息（ID、角色、正文 SHA 都相同才算已处理），统计本人消息条数、字数和语音标记，列出工作区回执与 Library 来源登记，并按现有分块和预占公式估算调用数与费用上限。基线默认取 `--workspace` 中 imports 已登记的密封批次快照；推导不到时必须显式传 `--baseline-catalog`（须与某个已发布 commit 逐字节一致）。不调用模型、不写工作区或笔记库，输出文件必须尚不存在：
+
+```sh
+.venv/bin/python -m chatgpt_pipeline incremental-plan \
+  /absolute/path/to/exports/account-a \
+  --workspace runtime/workbench --vault /absolute/path/to/vault \
+  --since 2026-01-01T00:00:00+00:00 \
+  --out runtime/catchup-example/plan.json --summary runtime/catchup-example/plan.md
+```
+
+成稿目标数要等筛选、复核和编辑合并之后才知道，计划只给出每目标两次调用的预占上限和验证器允许的条目上限，不是报价；实际费用以运行账本为准。
+
 也可以直接准备官方导出的 ZIP。适配器读取 `conversations.json` 或 `conversations-N.json`，记录 ZIP、成员、账号、会话和消息指纹，不解压媒体。`account-a` 是示例标识，同一个真实账号应持续使用同一个自定标识：
 
 ```sh
