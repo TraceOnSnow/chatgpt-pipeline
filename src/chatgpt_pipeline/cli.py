@@ -118,6 +118,8 @@ def main():
             from .incremental import dumps, plan as incremental_plan, summary_text, write_private
             from .verify import require
             require(args.workspace or args.baseline_catalog, "Pass --workspace to derive a baseline or --baseline-catalog")
+            require(args.out is None or args.summary is None or args.out.resolve() != args.summary.resolve(),
+                    "--out and --summary must be different files")
             for target in (args.out, args.summary):
                 require(target is None or not target.exists(), "Output exists; existing files are never replaced")
             result = incremental_plan(args.account_root, args.commit, workspace=args.workspace,

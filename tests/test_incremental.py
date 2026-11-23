@@ -40,9 +40,12 @@ def package(conversation_id, messages):
                           "metadata": {}, "content": json.loads(json.dumps(m["content"]))} for m in messages]}
 
 
-def publish(root, conversations, *, live=True):
+def publish(root, conversations, *, live=True, bodiless=()):
     """Write objects, a catalog and its commit exactly like the uploader layout."""
     entries, objects = [], []
+    for conversation_id in bodiless:
+        entries.append({"id": conversation_id, "title": "title " + conversation_id, "body_status": "not_fetched",
+                        "created": 1, "updated": 1})
     for conversation_id, messages in conversations.items():
         body = package(conversation_id, messages)
         data = encoded(body)
@@ -53,8 +56,8 @@ def publish(root, conversations, *, live=True):
         entries.append({"id": conversation_id, "title": "title " + conversation_id, "body_status": "current",
                         "object": name, "raw_sha256": body["raw_sha256"], "content_sha256": body["content_sha256"],
                         "created": messages[0]["create_time"], "updated": messages[-1]["create_time"]})
-    catalog = {"schema_version": 1, "account_key": root.name, "listing_complete": True, "bodies_complete": True,
-               "body_count": len(entries), "conversations": entries}
+    catalog = {"schema_version": 1, "account_key": root.name, "listing_complete": True,
+               "bodies_complete": not bodiless, "body_count": len(entries) - len(bodiless), "conversations": entries}
     catalog_data = encoded(catalog)
     catalog_path = f"catalogs/{sha(catalog_data)}.json"
     (root / "catalogs").mkdir(exist_ok=True)
@@ -68,6 +71,12 @@ def publish(root, conversations, *, live=True):
     path = root / "commits" / (sha(commit) + ".commit.json")
     path.write_bytes(commit)
     return path, root / catalog_path
+
+
+def texts(messages):
+    return [{"id": m["id"], "role": m["author"]["role"],
+             "text": m["content"]["parts"][0] if m["content"]["content_type"] == "text"
+             else m["content"]["parts"][0]["text"]} for m in messages]
 
 
 def tree_digest(directory):
@@ -105,12 +114,22 @@ class IncrementalPlanTests(unittest.TestCase):
         self.base_commit, self.base_catalog = publish(self.root, BASE, live=False)
         self.latest_commit, _ = publish(self.root, LATEST)
 
-    def workspace(self, *, receipt=True, wal=False):
-        batch = self.base / "batch"
+    def workspace(self, *, receipt=True, journal=False, queued=None, scope=None):
+        """A registered batch whose jobs queued ``queued``: conversation -> (context, primary) messages."""
+        if queued is None:
+            queued = {cid: ([], BASE[cid]) for cid in BASE}
+        batch, store = self.base / "batch", self.base / "store"
         batch.mkdir()
+        store.mkdir()
+        entries = []
+        for conversation_id, (context, primary) in queued.items():
+            source = {"account_key": self.root.name, "conversation_id": conversation_id}
+            entries.append({"source": source, "jobs": [bulk.ensure_job(store, source, texts(context), texts(primary))]})
         manifest = {"snapshots": [{"account_key": self.root.name, "catalog_sha256": sha(self.base_catalog.read_bytes()),
                                    "commit_sha256": self.base_commit.name.split(".")[0], "source_root": str(self.root)}],
-                    "conversations": []}
+                    "store": str(store), "conversations": entries}
+        if scope:
+            manifest["scope"] = scope
         bulk.save(batch / "manifest.json", manifest)
         bulk.save(batch / "manifest-seal.json", {"sha256": bulk.digest(manifest)})
         bulk.save(batch / "progress.json", {"actual_cost_usd": "0.25"})
@@ -136,8 +155,8 @@ class IncrementalPlanTests(unittest.TestCase):
         if receipt:
             (workspace / "vault-imports" / "vaulthash").mkdir(parents=True)
             bulk.save(workspace / "vault-imports" / "vaulthash" / "item-a.json", {"id": "note"})
-        if wal:
-            (workspace / "state.sqlite3-wal").write_bytes(b"x")
+        if journal:
+            (workspace / "state.sqlite3-journal").write_bytes(b"x")
         return workspace
 
     def vault(self):
@@ -211,14 +230,16 @@ class IncrementalPlanTests(unittest.TestCase):
         before = (tree_digest(workspace), tree_digest(vault), tree_digest(self.root))
         result = plan(self.root, workspace=workspace, vault=vault)
         self.assertEqual((tree_digest(workspace), tree_digest(vault), tree_digest(self.root)), before)
-        self.assertFalse((workspace / "state.sqlite3-wal").exists())
+        self.assertFalse((workspace / "state.sqlite3-journal").exists())
         self.assertEqual(result["baseline"]["sources"][0]["origin"], "workspace_registered_batch")
+        self.assertEqual(result["baseline"]["treated_as_processed"], "queued_primary_messages")
         self.assertEqual(result["counts"]["new_conversations"], 1)
         rows = self.by_id(result)
         self.assertEqual(rows["conv-a"]["workbench"], {"items": 1, "decisions": {"todo": 1}, "vault_import_receipts": 1})
         self.assertEqual(rows["conv-a"]["library"]["item_sources"], 1)
         self.assertEqual(rows["conv-c"]["library"]["conversation_sources"], 1)
         self.assertEqual(rows["conv-c"]["library"]["unprocessed_messages_already_referenced"], 1)
+        self.assertEqual(rows["conv-c"]["library"]["covered_by_library"], 0)
         ledger = result["estimate"]["notes_ledger"]
         self.assertEqual(ledger["remaining_usd"], "1.7")
         self.assertEqual(ledger["unknown_cost_calls"], 1)
@@ -233,8 +254,8 @@ class IncrementalPlanTests(unittest.TestCase):
         unpublished.write_bytes(encoded(catalog))
         with self.assertRaisesRegex(ValueError, "no published commit"):
             plan(self.root, baseline_catalogs=[unpublished])
-        with self.assertRaisesRegex(ValueError, "WAL"):
-            plan(self.root, workspace=self.workspace(wal=True))
+        with self.assertRaisesRegex(ValueError, "rollback journal"):
+            plan(self.root, workspace=self.workspace(journal=True))
 
     def test_cli_writes_new_private_files_and_never_replaces(self):
         out, summary = self.base / "plan" / "plan.json", self.base / "plan" / "summary.md"
@@ -243,12 +264,93 @@ class IncrementalPlanTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()) as printed:
             cli.main()
         self.assertEqual(json.loads(printed.getvalue())["counts"]["new_conversations"], 1)
-        self.assertEqual(json.loads(out.read_bytes())["schema"], "chatgpt-incremental-plan-v1")
+        self.assertEqual(json.loads(out.read_bytes())["schema"], "chatgpt-incremental-plan-v2")
         self.assertEqual(out.stat().st_mode & 0o777, 0o600)
         self.assertTrue(summary.read_text().startswith("# Incremental plan"))
         with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit):
             with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
                 cli.main()
+
+    def test_explicit_catalog_is_labelled_whole_catalog(self):
+        result = plan(self.root, baseline_catalogs=[self.base_catalog])
+        self.assertEqual(result["baseline"]["treated_as_processed"], "whole_catalog")
+        self.assertEqual(result["baseline"]["sources"][0]["treated_as_processed"], "whole_catalog")
+        self.assertIn("整份 catalog 视为已处理", summary_text(result))
+
+    def test_date_bounded_batch_does_not_mark_earlier_or_skipped_messages_processed(self):
+        # The batch saw the whole BASE snapshot but only queued a2 as primary (a1 was old context)
+        # and skipped conv-b entirely.
+        workspace = self.workspace(queued={"conv-a": (BASE["conv-a"][:1], BASE["conv-a"][1:])},
+                                   scope={"type": "one-authorized-date-bounded-incremental"})
+        result = plan(self.root, workspace=workspace)
+        rows = self.by_id(result)
+        self.assertEqual(rows["conv-a"]["change"], "continuation")
+        self.assertEqual(rows["conv-a"]["baseline_covered_messages"], 1)
+        self.assertEqual(rows["conv-a"]["stats"]["user_messages"], 2)
+        self.assertEqual(rows["conv-b"]["change"], "new_conversation")
+        self.assertEqual(rows["conv-b"]["unprocessed_messages"], 2)
+        self.assertEqual(result["counts"]["new_conversations"], 2)
+        self.assertNotIn("unchanged_conversations", result["counts"])
+        batch = result["baseline"]["registered_batches"][0]
+        self.assertEqual((batch["account_jobs"], batch["account_primary_refs"]), (1, 1))
+
+    def test_exact_library_evidence_is_deducted_from_primary_and_cost(self):
+        without = plan(self.root, baseline_catalogs=[self.base_catalog])
+        vault = self.base / "vault"
+        (vault / ".markdown-library").mkdir(parents=True)
+        c1, c3 = texts(LATEST["conv-c"])[0], texts(LATEST["conv-c"])[2]
+        a3 = texts(LATEST["conv-a"])[2]
+        bulk.save(vault / ".markdown-library" / "state.json", {"sources": {
+            "chatgpt-source-first-covered-v1:x": {"id": "n1", "source": {
+                "account_key": self.root.name, "conversation_id": "conv-c", "evidence": [
+                    {"id": "m001", "primary": True, "role": "user", "source_message_id": "c1",
+                     "text_sha256": sha(c1["text"].encode())},
+                    {"id": "m002", "primary": True, "role": "user", "source_message_id": "c3",
+                     "text_sha256": sha(b"different text")}]}},
+            "chatgpt-memory-delivery-v1:y": {"id": "n2", "source": {
+                "account_key": self.root.name, "conversation_id": "conv-a",
+                "evidence": [], "input_context": [{"account_key": self.root.name, "conversation_id": "conv-a",
+                                                   "message_id": "a3", "role": "user",
+                                                   "text_sha256": sha(a3["text"].encode())}]}},
+            "chatgpt-pending-manual-v1:z": {"id": "n3", "source": {"account_key": self.root.name,
+                                                                   "conversation_id": "conv-a"}}}})
+        result = plan(self.root, baseline_catalogs=[self.base_catalog], vault=vault)
+        rows = self.by_id(result)
+        self.assertEqual(rows["conv-c"]["covered_by_library"], 1)
+        self.assertEqual(rows["conv-c"]["covered_by_library_types"], {"chatgpt-source-first-covered-v1": 1})
+        self.assertEqual(rows["conv-c"]["stats"]["user_messages"], 1)
+        self.assertEqual(rows["conv-c"]["unprocessed_messages"], 2)
+        self.assertEqual(rows["conv-a"]["covered_by_library"], 0)  # context and conversation-only refs are hints
+        self.assertEqual(rows["conv-a"]["library"]["conversation_sources"], 2)
+        self.assertEqual(result["counts"]["covered_by_library"], 1)
+        self.assertEqual(result["counts"]["unprocessed_user_messages"],
+                         without["counts"]["unprocessed_user_messages"] - 1)
+        self.assertEqual(rows["conv-c"]["screen_jobs"][0]["primary_messages"], 2)
+        # The covered message stays available as context but is no longer screened as primary.
+        self.assertEqual(rows["conv-c"]["screen_jobs"][0]["context_messages"], 1)
+        self.assertEqual(rows["conv-c"]["screen_jobs"][0]["primary_characters"],
+                         self.by_id(without)["conv-c"]["screen_jobs"][0]["primary_characters"] - len(c1["text"]))
+
+    def test_baseline_conversation_without_current_body_is_a_gap(self):
+        commit, _ = publish(self.root, {"conv-a": LATEST["conv-a"]}, bodiless=["conv-b"])
+        result = plan(self.root, commit, baseline_catalogs=[self.base_catalog])
+        self.assertIn({"conversation_id": "conv-b", "body_status": "not_fetched",
+                       "reason": "baseline_conversation_without_current_body"}, result["gaps"])
+
+    def test_bodiless_baseline_conversation_is_not_a_continuation(self):
+        _, catalog = publish(self.root, BASE, live=False, bodiless=["conv-c"])
+        result = plan(self.root, self.latest_commit, baseline_catalogs=[catalog])
+        self.assertEqual(self.by_id(result)["conv-c"]["change"], "new_conversation")
+
+    def test_cli_refuses_same_out_and_summary_before_writing(self):
+        target = self.base / "plan" / "same.json"
+        argv = ["chatgpt-pipeline", "incremental-plan", str(self.root), "--baseline-catalog", str(self.base_catalog),
+                "--out", str(target), "--summary", str(self.base / "plan" / ".." / "plan" / "same.json")]
+        with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit):
+            with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()) as error:
+                cli.main()
+        self.assertIn("different files", error.getvalue())
+        self.assertFalse((self.base / "plan").exists())
 
     def test_note_reservation_helper_matches_existing_formula(self):
         payload = {"max_tokens": 8000, "messages": [{"content": "中" * 10}]}
