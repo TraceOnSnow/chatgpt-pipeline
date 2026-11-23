@@ -64,6 +64,12 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
 
 `--since`/`--until` 的日期按 Asia/Shanghai 自然日（`--until` 含当天），也接受 ISO 时间。输出文件必须尚不存在，可选 `--format json`、`--no-context`（不带上一条助手回复末尾 200 字）。不调用模型，不写 Vault 或 workbench，不复制原始会话。
 
+查重辅助（都是启发式，字段名带 `heuristic`）：
+
+- `--library-writes`：每条本人消息加 `library_writes_heuristic`，即从这条消息到下一条本人消息之前，助手的库写调用。先沿 parentUuid 链归属；链在压缩处断开时，按文件顺序归属。识别的调用有四类：Bash 里的 `markdown-library` create/replace/edit/import/organize/move/merge/publish-article/cover-source（含变量、shell 函数和 Python 列表包装，以及之后再运行的这类辅助脚本）；库 MCP 的 create/replace/edit/merge/move/organize；对 Vault 路径的 Edit/Write。默认只预览的子命令，没带 `--apply` 时记为 `applied: false`。子 Agent 记录和直接改文件的脚本看不到，所以“没有写操作”不能证明内容没进库。
+- `--dictation`：加确定性的 `dictation_candidate`。去掉粘贴和链接后，本人原话不少于 60 字（不计空白）；不是按钮回复，也不是斜杠命令；含经历/感想特征词或保存意图词。规则常量在 `claude_code.py` 的 `DICTATION_*`。
+- `--uncovered-dictation FILE`：另写一个 JSON，列出没有 applied 库写的口述候选，按（会话，上海日期）分组。每条只有 uuid、日期、字数和前 80 字，放私密目录。
+
 ## 有限筛选与初稿
 
 准备后先检查 `runtime/memory-example/scope.json`、`gaps.json` 和 `progress.json`。以下命令会发送付费请求；只有在确认所选来源和累计预算后才执行。示例预算为该筛选批次累计 0.10 USD，并非单次调用额度或处理完成保证：

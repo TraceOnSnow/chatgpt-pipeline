@@ -97,6 +97,12 @@ def main():
     claude_code.add_argument("--until", help="Exclusive; a YYYY-MM-DD value includes that whole Asia/Shanghai day")
     claude_code.add_argument("--segments", type=Path, help="Also write a new JSON summary per (session, Asia/Shanghai date)")
     claude_code.add_argument("--no-context", action="store_true", help="Omit the previous assistant reply tail")
+    claude_code.add_argument("--library-writes", action="store_true",
+                             help="Add library_writes_heuristic: library CLI/MCP and Vault Edit/Write calls after each message")
+    claude_code.add_argument("--dictation", action="store_true",
+                             help="Add the deterministic dictation_candidate flag (rule constants in claude_code.py)")
+    claude_code.add_argument("--uncovered-dictation", type=Path,
+                             help="Also write a new JSON list of dictation candidates with no applied library write")
     args = parser.parse_args()
     if args.command == "paths":
         root = args.data_root.expanduser().resolve()
@@ -187,7 +193,8 @@ def main():
         elif args.command == "claude-code-messages":
             from .claude_code import run as extract_claude_code
             output = extract_claude_code(args.dir, args.out, args.format, args.since, args.until,
-                                         args.segments, not args.no_context)
+                                         args.segments, not args.no_context, args.library_writes,
+                                         args.dictation, args.uncovered_dictation)
         elif args.command == "workbench-serve":
             from .workbench import serve
             serve(args.workspace, args.port, args.key_file, args.call, args.vault, not args.no_resume)
