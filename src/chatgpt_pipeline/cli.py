@@ -29,6 +29,34 @@ def main():
     plan.add_argument("--since", help="Also count unprocessed user messages at or after this ISO time (with timezone)")
     plan.add_argument("--out", type=Path, help="Write the JSON plan to a new file instead of stdout")
     plan.add_argument("--summary", type=Path, help="Also write a readable Markdown summary to a new file")
+    archive = sub.add_parser("archive-read", help="Read-only: find conversations by own text/date/voice, or read one")
+    archive.add_argument("account_root", type=Path)
+    archive.add_argument("--commit", type=Path, help="Published commit; default is the one matching catalog.json")
+    archive.add_argument("--conversation", help="Read this conversation (exact ID or unique prefix of 8+ characters)")
+    archive.add_argument("--since", help="Own messages at/after this date (YYYY-MM-DD in --tz) or ISO time with timezone")
+    archive.add_argument("--until", help="Own messages up to this date (inclusive day) or before this ISO time")
+    archive.add_argument("--tz", default="UTC", help="IANA timezone for plain dates and displayed times; default UTC")
+    archive.add_argument("--keyword", action="append", default=[], help="Text in your own messages or the title; repeatable")
+    archive.add_argument("--any", action="store_true", help="Match any keyword instead of all")
+    archive.add_argument("--id", action="append", default=[], help="Limit to this conversation ID or prefix; repeatable")
+    voice = archive.add_mutually_exclusive_group()
+    voice.add_argument("--voice", dest="voice", action="store_const", const=True, help="Only conversations with voice input")
+    voice.add_argument("--no-voice", dest="voice", action="store_const", const=False, help="Only conversations without voice input")
+    archive.add_argument("--limit", type=int, default=30)
+    archive.add_argument("--snippet-chars", type=int, default=60)
+    archive.add_argument("--context", action="store_true", help="With --conversation: add truncated preceding assistant reply")
+    archive.add_argument("--context-chars", type=int, default=200)
+    archive.add_argument("--format", choices=["json", "markdown"], default="json")
+    archive.add_argument("--out", type=Path, help="Write to a new file instead of stdout")
+    covered = sub.add_parser("covered-evidence", help="Read-only: build a cover-source --source JSON for one conversation")
+    covered.add_argument("account_root", type=Path)
+    covered.add_argument("--commit", type=Path, help="Published commit; default is the one matching catalog.json")
+    covered.add_argument("--conversation", required=True, help="Exact conversation ID or unique prefix of 8+ characters")
+    covered.add_argument("--message", action="append", default=[], help="Covered message ID; repeatable; default all own messages")
+    covered.add_argument("--decision", help="Why the current note already covers these messages")
+    covered.add_argument("--actor", help="Who decided; cover-source defaults to manual-editorial")
+    covered.add_argument("--allow-stale", action="store_true", help="Accept a body the catalog marks stale")
+    covered.add_argument("--out", type=Path, help="Write to a new file instead of stdout")
     load = sub.add_parser("ingest", help="Verify all commits and build an offline index")
     load.add_argument("--exports", type=Path, default=Path("/home/trace/data/chatgpt/exports"))
     load.add_argument("--database", type=Path, required=True)
@@ -133,6 +161,37 @@ def main():
                 written["summary"] = write_private(args.summary, summary_text(result).encode())
             output = {"written": written, "counts": result["counts"], "estimate": {
                 k: v for k, v in result["estimate"].items() if k not in ("basis", "notes_ledger")}}
+        elif args.command in ("archive-read", "covered-evidence"):
+            from . import archive
+            from .incremental import dumps, write_private
+            from .verify import require
+            require(args.out is None or not args.out.exists(), "Output exists; existing files are never replaced")
+            if args.command == "covered-evidence":
+                result = archive.covered_evidence(args.account_root, args.commit, conversation=args.conversation,
+                                                  message_ids=args.message, decision=args.decision,
+                                                  actor=args.actor, allow_stale=args.allow_stale)
+                data = dumps(result)
+                summary = {"conversation_id": result["conversation_id"], "evidence": len(result["evidence"]),
+                           "roles": sorted({e["role"] for e in result["evidence"]})}
+            else:
+                if args.conversation:
+                    result = archive.read(args.account_root, args.commit, conversation=args.conversation,
+                                          tz=args.tz, context=args.context, context_chars=args.context_chars)
+                    summary = {"conversation_id": result["source"]["conversation_id"],
+                               "user_messages": result["user_messages"], "voice_messages": result["voice_messages"]}
+                    render = archive.read_markdown
+                else:
+                    result = archive.search(args.account_root, args.commit, since=args.since, until=args.until,
+                                            tz=args.tz, keywords=args.keyword, any_keyword=args.any,
+                                            conversation_ids=args.id, voice=args.voice, limit=args.limit,
+                                            snippet_chars=args.snippet_chars)
+                    summary = {"matched": result["matched"], "returned": result["returned"]}
+                    render = archive.search_markdown
+                data = render(result).encode() if args.format == "markdown" else dumps(result)
+            if args.out is None:
+                sys.stdout.buffer.write(data)
+                return
+            output = {"written": write_private(args.out, data), **summary}
         elif args.command == "ingest":
             output = ingest(args.exports, args.database)
         elif args.command == "status":

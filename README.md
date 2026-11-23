@@ -51,6 +51,24 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
 
 成稿目标数要等筛选、复核和编辑合并之后才知道，计划只给出每目标两次调用的预占上限和验证器允许的条目上限，不是报价；实际费用以运行账本为准。
 
+要回原始聊天按本人原话整理时，用只读的 `archive-read` 在已校验 commit 里找会话，不必自己 grep 档案或拼消息。按本人消息正文关键词（大小写不敏感，也匹配标题；多个关键词默认全部命中，`--any` 任一命中）、本人消息日期范围、会话 ID（完整或 8 位以上唯一前缀）和是否含语音筛选；纯日期按 `--tz` 解释，`--until` 含当天。候选列表给出 ID、首末本人消息时间、本人消息数、语音数、标题和截断的命中片段。加 `--conversation` 输出该会话的规范化本人消息，每条带消息 ID、时间和 `text_sha256`；`--context` 另附前一条助手回复的截断上下文（不是本人原话）。默认 JSON，`--format markdown` 输出可读稿：
+
+```sh
+.venv/bin/python -m chatgpt_pipeline archive-read /absolute/path/to/exports/account-a \
+  --since 2026-01-09 --until 2026-01-10 --tz America/Chicago --voice --keyword 记录
+.venv/bin/python -m chatgpt_pipeline archive-read /absolute/path/to/exports/account-a \
+  --conversation CONVERSATION_ID --context --format markdown --out runtime/read-example/chat.md
+```
+
+现稿已经覆盖某段聊天时，`covered-evidence` 生成可直接交给 `markdown-library cover-source --source` 的 `chatgpt-source-first-covered-v1` JSON。默认取该会话全部有文字的本人消息，`--message` 可显式指定（可含助手消息，但至少一条本人消息，最多 200 条）；`text_sha256` 与管线内部一致，是规范化消息正文 UTF-8 字节的 sha256。`input_source` 记录 commit、catalog、对象路径与哈希及选取方式。正文被 catalog 标为过期或规范化有缺口时拒绝生成（过期可显式 `--allow-stale`）：
+
+```sh
+.venv/bin/python -m chatgpt_pipeline covered-evidence /absolute/path/to/exports/account-a \
+  --conversation CONVERSATION_ID --decision "现稿已覆盖这段的要点" --out runtime/cover-example/covered.json
+```
+
+两个命令都只校验并读取档案：不调用模型、不读写工作区或笔记库；`--out` 只写新文件（0600），已存在即拒绝，写文件时终端只打印计数。每次运行都会完整校验 commit，档案按小时更新时可用 `--commit` 固定同一版本。
+
 也可以直接准备官方导出的 ZIP。适配器读取 `conversations.json` 或 `conversations-N.json`，记录 ZIP、成员、账号、会话和消息指纹，不解压媒体。`account-a` 是示例标识，同一个真实账号应持续使用同一个自定标识：
 
 ```sh
