@@ -39,7 +39,7 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
   --database runtime/index.sqlite3 --out runtime/selection-example
 ```
 
-已有处理批次后，可用只读增量计划核对新会话和续聊，再决定是否授权新一轮筛选。它校验指定或最新的已发布 commit，与基线逐条比较消息（ID、角色、正文 SHA 都相同才算已处理），统计本人消息条数、字数和语音标记，列出工作区回执与 Library 来源登记，并按现有分块和预占公式估算调用数与费用上限。基线默认取 `--workspace` 中 imports 已登记的密封批次快照；推导不到时必须显式传 `--baseline-catalog`（须与某个已发布 commit 逐字节一致）。不调用模型、不写工作区或笔记库，输出文件必须尚不存在：
+已有处理批次后，可用只读增量计划核对新会话和续聊，再决定是否授权新一轮筛选。它校验指定或最新的已发布 commit，与基线逐条比较消息（ID、角色、正文 SHA 都相同才算已处理），统计本人消息条数、字数和语音标记，列出工作区回执与 Library 来源登记，并按现有分块和预占公式估算调用数与费用上限。基线默认取 `--workspace` 中 imports 已登记的密封批次实际排队的消息（各 job `input.json` 里 `primary=true` 的条目）；按日期截断前的消息、只作上下文的消息和批次跳过的会话都不算已处理。显式传 `--baseline-catalog`（须与某个已发布 commit 逐字节一致）时，整份 catalog 视为已处理，输出会标注 `treated_as_processed=whole_catalog`。传 `--vault` 时，Library 证据里消息 ID、角色、正文 SHA 完全一致的本人消息从待处理中扣除并计为 `covered_by_library`；只登记了会话的旧来源仍只作提示。工作区数据库以 `mode=ro` 只读事务读取，存在 `state.sqlite3-journal` 时拒绝运行。不调用模型、不写工作区或笔记库，输出文件必须尚不存在：
 
 ```sh
 .venv/bin/python -m chatgpt_pipeline incremental-plan \
