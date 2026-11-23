@@ -50,6 +50,20 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
 
 [示例 profile](profiles/example.json) 是通用合成配置，只含筛选和复核提示；可以复制修改后用于新批次。prepare 离线冻结实际提示与 SHA，不会改写旧批次。可用 `--index runtime/index.sqlite3` 对照已有索引：只跳过同账号、同会话、同正文指纹的材料，不猜测不同账号的关联。附件和未知结构记录为缺口，有文字不表示理解了图片或音频。
 
+### Claude Code 会话中的本人消息（只读）
+
+`claude-code-messages` 只读取一个项目会话目录顶层的 `*.jsonl`（子 Agent 记录在子目录，不读），抽出本人输入：`origin.kind=human` 的 user 记录，以及 `humanTurn` 的中途插话（`queued_command`）。工具结果、任务通知、peer 转述、压缩摘要、技能/宿主注入、中断提示、本地命令输出和 Agent 启动会话的说明都排除，并按原因计数。开头/结尾的 `<system-reminder>` 被剥掉，`<pasted_content>` 区段标出位置、不算本人字数（`own_chars`）。以记录 `uuid` 去重，会话归属取记录里的 `sessionId`；与上一轮收尾按钮标签完全一致的短回复标为 `is_button_reply`。
+
+```sh
+.venv/bin/python -m chatgpt_pipeline claude-code-messages \
+  --dir /absolute/path/to/.claude/projects/<project> \
+  --out runtime/example/claude-code-messages.jsonl \
+  --segments runtime/example/claude-code-segments.json \
+  --since 2026-01-01 --until 2026-01-31
+```
+
+`--since`/`--until` 的日期按 Asia/Shanghai 自然日（`--until` 含当天），也接受 ISO 时间。输出文件必须尚不存在，可选 `--format json`、`--no-context`（不带上一条助手回复末尾 200 字）。不调用模型，不写 Vault 或 workbench，不复制原始会话。
+
 ## 有限筛选与初稿
 
 准备后先检查 `runtime/memory-example/scope.json`、`gaps.json` 和 `progress.json`。以下命令会发送付费请求；只有在确认所选来源和累计预算后才执行。示例预算为该筛选批次累计 0.10 USD，并非单次调用额度或处理完成保证：

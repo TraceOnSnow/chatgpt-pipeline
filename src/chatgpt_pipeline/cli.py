@@ -87,6 +87,16 @@ def main():
     workbench.add_argument("--call", action="store_true")
     workbench.add_argument("--vault", type=Path, help="Explicitly initialized Markdown library root; no automatic creation")
     workbench.add_argument("--no-resume", action="store_true", help="Do not resume saved jobs at server startup; model actions remain explicit")
+    claude_code = sub.add_parser("claude-code-messages",
+                                 help="Read-only: extract the user's own Claude Code messages; no model, Vault or workbench writes")
+    claude_code.add_argument("--dir", type=Path, default=Path("/home/trace/.claude/projects/-home-trace-projects"),
+                             help="Project session directory; only its top-level *.jsonl files are read")
+    claude_code.add_argument("--out", type=Path, required=True, help="New output file; existing files are never overwritten")
+    claude_code.add_argument("--format", choices=["jsonl", "json"], default="jsonl")
+    claude_code.add_argument("--since", help="Inclusive; YYYY-MM-DD (Asia/Shanghai day) or ISO 8601, naive = Asia/Shanghai")
+    claude_code.add_argument("--until", help="Exclusive; a YYYY-MM-DD value includes that whole Asia/Shanghai day")
+    claude_code.add_argument("--segments", type=Path, help="Also write a new JSON summary per (session, Asia/Shanghai date)")
+    claude_code.add_argument("--no-context", action="store_true", help="Omit the previous assistant reply tail")
     args = parser.parse_args()
     if args.command == "paths":
         root = args.data_root.expanduser().resolve()
@@ -174,6 +184,10 @@ def main():
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 plans = list(executor.map(recover_selected, selected))
             output = {"applied": args.apply, "plans": plans, "usage": workspace.usage()}
+        elif args.command == "claude-code-messages":
+            from .claude_code import run as extract_claude_code
+            output = extract_claude_code(args.dir, args.out, args.format, args.since, args.until,
+                                         args.segments, not args.no_context)
         elif args.command == "workbench-serve":
             from .workbench import serve
             serve(args.workspace, args.port, args.key_file, args.call, args.vault, not args.no_resume)
