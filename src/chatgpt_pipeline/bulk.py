@@ -539,7 +539,7 @@ def export(output, include_excerpts=True):
     output, manifest, store = batch(output)
     jobs, reviews = member_jobs(manifest, store)
     states, cost, unknown = {}, Decimal(0), 0
-    attempts, usage_reports = 0, 0
+    attempts, usage_reports, agent_runs = 0, 0, 0
     token_totals = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
     kept, pending, skipped = [], [], []
     source_cache = {}
@@ -548,6 +548,7 @@ def export(output, include_excerpts=True):
         state = read(directory / "state.json")
         states[state["state"]] = states.get(state["state"], 0) + 1
         attempts += int((directory / "attempt.json").exists())
+        agent_runs += int((directory / "agent-receipt.json").exists())
         usage_file = directory / "usage.json"
         if usage_file.exists():
             usage = read(usage_file).get("usage") or {}
@@ -605,7 +606,8 @@ def export(output, include_excerpts=True):
                "kept_conversations": len({(k['account_key'], k['conversation_id']) for k in kept}),
                "skipped_chunks": len(skipped), "pending_chunks": len(pending), "source_gaps": len(manifest["gaps"]),
                "actual_cost_usd": str(cost), "unpriced_or_ambiguous_attempts": unknown,
-               "attempted_calls": attempts, "usage_reported_calls": usage_reports, **token_totals,
+               "attempted_calls": attempts, "usage_reported_calls": usage_reports,
+               "agent_executed_jobs": agent_runs, **token_totals,
                "drained": not any(states.get(s, 0) for s in ("prepared", "request_started", "response_received")),
                "finished": len(pending) == 0 and not manifest["gaps"] and all(s in TERMINAL for s in states)}
     save(output / "selection.json", kept)

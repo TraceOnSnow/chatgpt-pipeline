@@ -29,6 +29,26 @@ def main():
     plan.add_argument("--since", help="Also count unprocessed user messages at or after this ISO time (with timezone)")
     plan.add_argument("--out", type=Path, help="Write the JSON plan to a new file instead of stdout")
     plan.add_argument("--summary", type=Path, help="Also write a readable Markdown summary to a new file")
+    prep = sub.add_parser("incremental-prepare",
+                          help="Seal a selection batch over the plan's unprocessed messages; no model call")
+    prep.add_argument("account_root", type=Path)
+    prep.add_argument("--out", type=Path, required=True, help="New batch directory under runtime/")
+    prep.add_argument("--commit", type=Path)
+    prep.add_argument("--workspace", type=Path)
+    prep.add_argument("--baseline-catalog", type=Path, action="append", default=[])
+    prep.add_argument("--vault", type=Path)
+    prep.add_argument("--profile", type=Path, help="Selection profile, e.g. profiles/personal-memory-v1.json")
+    prep.add_argument("--since")
+    agent_tasks = sub.add_parser("agent-tasks",
+                                 help="Export unattempted jobs of a batch (screen, then reviews) for an agent executor")
+    agent_tasks.add_argument("--batch", type=Path, required=True)
+    agent_tasks.add_argument("--out", type=Path, required=True)
+    agent_record = sub.add_parser("agent-record", help="Validate and save an agent answer for one batch job")
+    agent_record.add_argument("--batch", type=Path, required=True)
+    agent_record.add_argument("--job", required=True)
+    agent_record.add_argument("--response", type=Path, required=True)
+    agent_record.add_argument("--executor", required=True, help="Agent and model, e.g. claude-code:claude-opus-5-5")
+    agent_record.add_argument("--check", action="store_true", help="Validate only; save nothing")
     archive = sub.add_parser("archive-read", help="Read-only: find conversations by own text/date/voice, or read one")
     archive.add_argument("account_root", type=Path)
     archive.add_argument("--commit", type=Path, help="Published commit; default is the one matching catalog.json")
@@ -177,6 +197,19 @@ def main():
                 written["summary"] = write_private(args.summary, summary_text(result).encode())
             output = {"written": written, "counts": result["counts"], "estimate": {
                 k: v for k, v in result["estimate"].items() if k not in ("basis", "notes_ledger")}}
+        elif args.command == "incremental-prepare":
+            from .incremental import prepare_batch
+            from .verify import require
+            require(args.workspace or args.baseline_catalog, "Pass --workspace to derive a baseline or --baseline-catalog")
+            output = prepare_batch(args.account_root, args.out, workspace=args.workspace,
+                                   baseline_catalogs=args.baseline_catalog, vault=args.vault,
+                                   profile_path=args.profile, since=args.since, commit=args.commit)
+        elif args.command == "agent-tasks":
+            from .agent_exec import tasks
+            output = tasks(args.batch, args.out)
+        elif args.command == "agent-record":
+            from .agent_exec import record
+            output = record(args.batch, args.job, args.response, args.executor, check_only=args.check)
         elif args.command in ("archive-read", "covered-evidence"):
             from . import archive
             from .incremental import dumps, write_private

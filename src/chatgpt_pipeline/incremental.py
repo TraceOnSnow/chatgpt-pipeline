@@ -344,7 +344,7 @@ def _bytes_reservation(size, max_tokens, floor=Decimal(0)):
 
 
 def plan(account_root, commit=None, *, workspace=None, baseline_catalogs=(), vault=None,
-         profile_path=None, since=None):
+         profile_path=None, since=None, keep_primary_ids=False):
     root = Path(account_root).absolute()
     commit_path = Path(commit).absolute() if commit else latest_commit(root)
     profile = bulk.load_profile(profile_path) if profile_path else None
@@ -437,11 +437,14 @@ def plan(account_root, commit=None, *, workspace=None, baseline_catalogs=(), vau
         # A conversation counts as continued only when some of its messages were actually processed.
         change = ("new_conversation" if not (prior and prior["keys"]) else "continuation"
                   if summary["unprocessed_messages"] else "new_unreadable_only")
-        primary_ids = set(summary.pop("primary_ids"))
+        ordered_primary = summary.pop("primary_ids")
+        primary_ids = set(ordered_primary)
         row = {"account_key": root.name, "conversation_id": entry["id"], "title": entry.get("title", ""),
                "change": change, "created": _utc(entry.get("created")), "updated": _utc(entry.get("updated")),
                "body_status": entry["body_status"], "object_path": entry["object"],
                "byte_sha256": verified["packages"][entry["object"]]["byte_sha256"], **summary}
+        if keep_primary_ids:
+            row["primary_ids"] = ordered_primary
         if entry["body_status"] != "current":
             row["body_gap"] = "Body is not current; refresh before any processing"
         if workspace_state is not None:
@@ -553,6 +556,87 @@ def plan(account_root, commit=None, *, workspace=None, baseline_catalogs=(), vau
             "(id, role, text sha256) evidence of user messages is deducted.",
             "Removed-from-branch counts never imply deletion; nothing is propagated.",
         ]}
+
+
+def prepare_batch(account_root, output, *, workspace=None, baseline_catalogs=(), vault=None,
+                  profile_path=None, since=None, commit=None):
+    """Seal a selection batch over exactly the unprocessed messages the plan reports.
+
+    Jobs are built like the 11-07 incremental intake: bulk.chunk_messages over the unprocessed
+    messages, context = last earlier user message + last earlier message, optional selection
+    profile, current source-policy revision. No model call is made; run it with bulk-run or an agent.
+    """
+    output = bulk.runtime_path(output)
+    require(not output.exists(), "Batch already exists; resume it instead")
+    result = plan(account_root, commit, workspace=workspace, baseline_catalogs=baseline_catalogs, vault=vault,
+                  profile_path=profile_path, since=since, keep_primary_ids=True)
+    root = Path(account_root).absolute()
+    commit_path = Path(commit).absolute() if commit else latest_commit(root)
+    verified = verify(root, commit_path)
+    require(verified["commit_sha256"] == result["source"]["commit_sha256"], "Commit moved between plan and prepare")
+    profile = bulk.load_profile(profile_path) if profile_path else None
+    store = Path(bulk.__file__).resolve().parents[2] / "runtime" / "selection-jobs"
+    store.mkdir(parents=True, exist_ok=True, mode=0o700)
+    by_id = {e["id"]: e for e in verified["catalog"]["conversations"]}
+    entries, gaps = [], list(result["gaps"])
+    for row in result["conversations"]:
+        if row["change"] not in ("new_conversation", "continuation"):
+            continue
+        entry = by_id[row["conversation_id"]]
+        if row["state"] != "ready" or entry["body_status"] != "current":
+            gaps.append({"conversation_id": row["conversation_id"], "reason": row.get("body_gap", row["state"])})
+            continue
+        obj = verified["packages"][entry["object"]]
+        normalized = normalize(obj["package"])
+        require(normalized["input_fingerprint"] == row["input_fingerprint"], "Source changed between plan and prepare")
+        eligible = normalized["analysis_messages"]
+        wanted = set(row["primary_ids"])
+        primary = [m for m in eligible if m["id"] in wanted]
+        if not any(m["role"] == "user" for m in primary):
+            gaps.append({"conversation_id": row["conversation_id"], "reason": "no_unprocessed_user_text"})
+            continue
+        source = {"account_key": root.name, "conversation_id": entry["id"],
+                  "source_path": str(root / entry["object"]), "object_path": entry["object"],
+                  "byte_sha256": obj["byte_sha256"], "raw_sha256": obj["package"]["raw_sha256"],
+                  "content_sha256": obj["package"]["content_sha256"], "catalog_sha256": verified["catalog_sha256"],
+                  "commit_sha256": verified["commit_sha256"], "normalization_version": VERSION,
+                  "input_fingerprint": normalized["input_fingerprint"], "branch": "current",
+                  "current_node": normalized["current_node"], "url": obj["package"].get("url"),
+                  "title": entry.get("title", ""),
+                  "incremental_scope": {"rule": "incremental-plan unprocessed messages",
+                                        "primary_message_ids": [m["id"] for m in primary], "old_context_only": True}}
+        positions = {m["id"]: i for i, m in enumerate(eligible)}
+        jobs = []
+        for _context, part in bulk.chunk_messages(primary):
+            prior = eligible[:positions[part[0]["id"]]]
+            context = []
+            old_user = next((m for m in reversed(prior) if m["role"] == "user"), None)
+            if old_user:
+                context.append(old_user)
+            if prior and (not context or context[-1]["id"] != prior[-1]["id"]):
+                context.append(prior[-1])
+            jobs.append(bulk.ensure_job(store, source, context, part, profile=profile))
+        entries.append({"source": source, "jobs": jobs, "message_count": len(primary),
+                        "source_characters": sum(len(m["text"]) for m in primary)})
+    job_ids = [j for e in entries for j in e["jobs"]]
+    require(0 < len(job_ids) <= bulk.MAX_JOBS and len(job_ids) == len(set(job_ids)), "Invalid finite job set")
+    manifest = {"version": bulk.POLICY, "created_at": now(),
+                "snapshots": [{"account_key": root.name, "catalog_sha256": verified["catalog_sha256"],
+                               "commit_sha256": verified["commit_sha256"], "source_root": str(root)}],
+                "store": str(store), "model": bulk.MODEL, "endpoint": bulk.ENDPOINT, "max_calls": len(job_ids) * 2,
+                "screen_jobs": len(job_ids), "source_characters": sum(e["source_characters"] for e in entries),
+                "conversations": entries, "gaps": gaps,
+                "scope": {"type": "incremental-plan", "plan_schema": result["schema"], "since": since,
+                          "baseline": result["baseline"]["treated_as_processed"],
+                          "covered_by_library": result["counts"].get("covered_by_library", 0)}}
+    if profile is not None:
+        manifest["selection_profile"] = profile
+    output.mkdir(parents=True, mode=0o700)
+    bulk.save(output / "manifest.json", manifest)
+    bulk.save(output / "manifest-seal.json", {"sha256": bulk.digest(manifest)})
+    progress = bulk.export(output)
+    return {"batch": str(output), "conversations": len(entries), "screen_jobs": len(job_ids),
+            "gaps": len(gaps), "model_calls": 0, "progress": progress}
 
 
 BASELINE_LABELS = {"whole_catalog": "整份 catalog 视为已处理 (whole catalog, explicit --baseline-catalog)",

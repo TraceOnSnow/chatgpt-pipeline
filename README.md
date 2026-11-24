@@ -115,6 +115,27 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
 
 密钥文件使用 `OPENROUTER_API_KEY=...` 格式，不写入 Git；直接 CLI 模型入口也支持 `OPENROUTER_API_KEY` 环境变量。模型和供应商策略由现有源码定义，实际可用性及价格以供应商为准。
 
+### 增量批次与 Agent 执行
+
+上一轮之后新增的聊天，可以直接按 `incremental-plan` 的结果封一个筛选批次，不另写准备脚本。`incremental-prepare` 只为计划里未处理的消息建任务：切块方式、前文上下文（之前最后一条本人消息和最后一条消息）、筛选配置与源文优先规则都和之前的增量批次一样，库里已登记覆盖的本人消息不会再进批次。它只准备，不调用模型：
+
+```sh
+.venv/bin/python -m chatgpt_pipeline incremental-prepare /absolute/path/to/exports/account-a \
+  --workspace runtime/workbench --vault /absolute/path/to/vault \
+  --profile profiles/personal-memory-v1.json --out runtime/batches/incremental-example
+```
+
+封好的批次可以照常用 `bulk-run --call` 交给 HTTP 供应商，也可以交给 Agent 执行。Agent 执行时冻结的请求、提示词和校验器都不变，只是换了执行者：`agent-tasks` 把尚未执行的任务导出成文件，包括每个任务的 system 和 user 原文，以及已完成的保留结果对应的复核任务；Agent 按 system 的要求写出 JSON 回答，再用 `agent-record` 交回。这条命令用和 HTTP 回复相同的 `validate` 检查；不合格的回答不落盘，可以改好再交，已完成的任务不会被覆盖。`--check` 只校验、不保存：
+
+```sh
+.venv/bin/python -m chatgpt_pipeline agent-tasks \
+  --batch runtime/batches/incremental-example --out runtime/batches/incremental-example/agent-tasks
+.venv/bin/python -m chatgpt_pipeline agent-record --batch runtime/batches/incremental-example \
+  --job JOB_ID --response answer.json --executor claude-code:MODEL_ID [--check]
+```
+
+Agent 执行的结果另存 `agent-receipt.json`，记录执行者、请求与回答哈希。它不写 `attempt.json`、`usage.json`，不进入供应商费用账本。`bulk-export` 的 `agent_executed_jobs` 统计这些任务，筛选完成后的 `notes-init` 等后续步骤照旧。
+
 notes-init 只准备候选，不生成或导入笔记。打开只读模式网页，先查看材料：
 
 ```sh
