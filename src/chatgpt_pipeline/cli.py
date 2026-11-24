@@ -109,6 +109,8 @@ def main():
     notes_init = sub.add_parser("notes-init", help="Import accepted selections into a durable inbox offline")
     notes_init.add_argument("--batch", type=Path, required=True)
     notes_init.add_argument("--workspace", type=Path, required=True)
+    notes_init.add_argument("--register-only", action="store_true",
+                            help="Record the batch as processed without queueing its candidates")
     notes_run = sub.add_parser("notes-process", help="Process one explicitly chosen item; at most two calls, no retries")
     notes_run.add_argument("--workspace", type=Path, required=True)
     notes_run.add_argument("--item", required=True)
@@ -262,7 +264,7 @@ def main():
             output = reconfigure_pending(args.out)
         elif args.command == "notes-init":
             from .notes import initialize
-            output = initialize(args.batch, args.workspace)
+            output = initialize(args.batch, args.workspace, register_only=args.register_only)
         elif args.command == "notes-process":
             if not args.call:
                 raise ValueError("notes-process requires --call; no request sent")

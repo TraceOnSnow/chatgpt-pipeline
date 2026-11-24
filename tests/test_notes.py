@@ -1,4 +1,6 @@
 import io
+import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import threading
@@ -70,6 +72,17 @@ class NoteTests(unittest.TestCase):
         for response in responses:
             response.status = 200
         return responses
+
+    def test_register_only_records_the_batch_without_queueing_items(self):
+        other = self.base / "runtime/workbench-register"
+        notes.initialize(self.batch, other, register_only=True)
+        listing = notes.Workspace(other).list("all")
+        self.assertEqual(listing["items"], [])
+        with sqlite3.connect(other / "state.sqlite3") as db:
+            origins = [json.loads(row[0]) for row in db.execute("SELECT origin FROM imports")]
+        self.assertEqual(len(origins), 1)
+        self.assertFalse(origins[0]["items_queued"])
+        self.assertEqual(origins[0]["batch"], str(self.batch))
 
     def test_import_decisions_and_job_identity_survive_restart(self):
         self.workspace.decide(self.item, "skip")

@@ -588,7 +588,13 @@ class Workspace:
         return result["title"], content
 
 
-def initialize(batch_path, directory):
+def initialize(batch_path, directory, register_only=False):
+    """Import accepted selections into the workspace inbox and register the batch as processed.
+
+    register_only records the sealed batch in ``imports`` (so incremental plans treat its queued
+    messages as processed) without queueing its candidates, for batches whose kept items were
+    written to the Library elsewhere with their own source registrations.
+    """
     batch_path, manifest, store = bulk.batch(batch_path)
     selected = bulk.read(batch_path / "selection.json")
     jobs, reviews = bulk.member_jobs(manifest, store)
@@ -655,9 +661,11 @@ def initialize(batch_path, directory):
             """)
             origin = {"batch": str(batch_path), "manifest_sha256": bulk.digest(manifest), "store": str(store),
                       "selection_sha256": sha((batch_path / "selection.json").read_bytes())}
+            if register_only:
+                origin["items_queued"] = False
             with db:
                 ordinal = db.execute("SELECT COALESCE(MAX(ordinal),0) FROM items").fetchone()[0]
-                for offset, (item_id, candidate) in enumerate(validated, 1):
+                for offset, (item_id, candidate) in enumerate([] if register_only else validated, 1):
                     db.execute("INSERT OR IGNORE INTO items(id,ordinal,title,summary,candidate,origin) VALUES(?,?,?,?,?,?)",
                                (item_id, ordinal + offset, candidate["title"], candidate["summary"],
                                 encoded(candidate, sort=True).decode(), encoded(origin, sort=True).decode()))
