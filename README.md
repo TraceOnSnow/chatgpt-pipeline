@@ -134,7 +134,7 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
   --job JOB_ID --response answer.json --executor claude-code:MODEL_ID [--check]
 ```
 
-Agent 执行的结果另存 `agent-receipt.json`，记录执行者、请求与回答哈希。它不写 `attempt.json`、`usage.json`，不进入供应商费用账本。`bulk-export` 的 `agent_executed_jobs` 统计这些任务，筛选完成后的 `notes-init` 等后续步骤照旧。
+Agent 执行的结果另存 `agent-receipt.json`，记录执行者、请求与回答哈希。它不写 `attempt.json`、`usage.json`，不进入供应商费用账本。`bulk-export` 的 `agent_executed_jobs` 统计这些任务，筛选完成后的 `notes-init` 等后续步骤照旧。如果保留下来的条目已由 Agent 直接整理进库，并各自登记了来源（新笔记用 `import --source-id`，已有笔记用 `cover-source`），就用 `notes-init --register-only` 只登记批次，不把候选放进工作台待办。这样之后的增量计划会把这批排队过的消息算作已处理。
 
 notes-init 只准备候选，不生成或导入笔记。打开只读模式网页，先查看材料：
 
