@@ -80,6 +80,26 @@ setup 只创建项目内 `.venv` 并安装锁定依赖，不创建材料工作�
 
 [示例 profile](profiles/example.json) 是通用合成配置，只含筛选和复核提示；可以复制修改后用于新批次。prepare 离线冻结实际提示与 SHA，不会改写旧批次。可用 `--index runtime/index.sqlite3` 对照已有索引：只跳过同账号、同会话、同正文指纹的材料，不猜测不同账号的关联。附件和未知结构记录为缺口，有文字不表示理解了图片或音频。
 
+### Claude Code 会话中的本人消息（只读）
+
+`claude-code-messages` 只读取一个项目会话目录顶层的 `*.jsonl`（子 Agent 记录在子目录，不读），抽出本人输入：`origin.kind=human` 的 user 记录，以及 `humanTurn` 的中途插话（`queued_command`）。工具结果、任务通知、peer 转述、压缩摘要、技能/宿主注入、中断提示、本地命令输出和 Agent 启动会话的说明都排除，并按原因计数。开头/结尾的 `<system-reminder>` 被剥掉，`<pasted_content>` 区段标出位置、不算本人字数（`own_chars`）。以记录 `uuid` 去重，会话归属取记录里的 `sessionId`；与上一轮收尾按钮标签完全一致的短回复标为 `is_button_reply`。
+
+```sh
+.venv/bin/python -m chatgpt_pipeline claude-code-messages \
+  --dir /absolute/path/to/.claude/projects/<project> \
+  --out runtime/example/claude-code-messages.jsonl \
+  --segments runtime/example/claude-code-segments.json \
+  --since 2026-01-01 --until 2026-01-31
+```
+
+`--since`/`--until` 的日期按 Asia/Shanghai 自然日（`--until` 含当天），也接受 ISO 时间。输出文件必须尚不存在，可选 `--format json`、`--no-context`（不带上一条助手回复末尾 200 字）。不调用模型，不写 Vault 或 workbench，不复制原始会话。
+
+查重辅助（都是启发式，字段名带 `heuristic`）：
+
+- `--library-writes`：每条本人消息加 `library_writes_heuristic`，即从这条消息到下一条本人消息之前，助手的库写调用。先沿 parentUuid 链归属；链在压缩处断开时，按文件顺序归属。识别的调用有四类：Bash 里的 `markdown-library` create/replace/edit/import/organize/move/merge/publish-article/cover-source（含变量、shell 函数和 Python 列表包装，以及之后再运行的这类辅助脚本）；库 MCP 的 create/replace/edit/merge/move/organize；对 Vault 路径的 Edit/Write。默认只预览的子命令，没带 `--apply` 时记为 `applied: false`。子 Agent 记录和直接改文件的脚本看不到，所以“没有写操作”不能证明内容没进库。
+- `--dictation`：加确定性的 `dictation_candidate`。去掉粘贴和链接后，本人原话不少于 60 字（不计空白）；不是按钮回复，也不是斜杠命令；含经历/感想特征词或保存意图词。规则常量在 `claude_code.py` 的 `DICTATION_*`。
+- `--uncovered-dictation FILE`：另写一个 JSON，列出没有 applied 库写的口述候选，按（会话，上海日期）分组。每条只有 uuid、日期、字数和前 80 字，放私密目录。
+
 ## 有限筛选与初稿
 
 准备后先检查 `runtime/memory-example/scope.json`、`gaps.json` 和 `progress.json`。以下命令会发送付费请求；只有在确认所选来源和累计预算后才执行。示例预算为该筛选批次累计 0.10 USD，并非单次调用额度或处理完成保证：
